@@ -4,7 +4,7 @@
 PRIVATE_KEY_PATH="/your_private_key_location"
 
 # Define server names and IP addresses
-server_names=("Friendly Server name 01" "Friendly Server name 01")
+server_names=("Friendly Server name 01" "Friendly Server name 02")
 server_ips=("231.x.x.x" "168.x.x.x")
 
 # Function to list and select a server
