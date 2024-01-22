@@ -66,77 +66,115 @@ while true; do
 
     LIVE_SITE=${site/staging./}
     STAGING_DB="/var/www/staging.$LIVE_SITE/htdocs/db_stage_sync.sql"
+    WP_POSTS_DB="/var/www/staging.$LIVE_SITE/htdocs/wp_posts.sql"
 
     echo ""
-    echo "Exporting the database from $LIVE_SITE..."
-    ssh -i "$PRIVATE_KEY_PATH" root@"$SERVER_IP" "gp wp $LIVE_SITE db export $STAGING_DB --add-drop-table --allow-root"
+    echo "Select sync method:"
+    echo "1) Full process (full database and optional: files and nginx rule)"
+    echo "2) Just wp_posts & wp_postmeta quick sync"
+    read -p "Your choice [1/2]: " sync_choice
 
-    echo ""
-    echo "Importing database to $site..."
-    ssh -i "$PRIVATE_KEY_PATH" root@"$SERVER_IP" "gp wp staging.$LIVE_SITE db import $STAGING_DB --allow-root"
+    if [[ $sync_choice == "1" ]]; then
+            # Full process
+            echo ""
+            echo "Exporting the database from $LIVE_SITE..."
+            ssh -i "$PRIVATE_KEY_PATH" root@"$SERVER_IP" "gp wp $LIVE_SITE db export $STAGING_DB --add-drop-table --allow-root"
 
-    # Rewrite URLs from live to staging
-    echo ""
-    echo "Rewriting URLs from $LIVE_SITE to staging.$LIVE_SITE..."
-    ssh -i "$PRIVATE_KEY_PATH" root@"$SERVER_IP" "gp wp staging.$LIVE_SITE search-replace 'https://$LIVE_SITE' 'https://staging.$LIVE_SITE' --skip-columns=guid --all-tables --allow-root"
+            echo ""
+            echo "Importing database to $site..."
+            ssh -i "$PRIVATE_KEY_PATH" root@"$SERVER_IP" "gp wp staging.$LIVE_SITE db import $STAGING_DB --allow-root"
 
+            # Rewrite URLs from live to staging
+            echo ""
+            echo "Rewriting URLs from $LIVE_SITE to staging.$LIVE_SITE..."
+            ssh -i "$PRIVATE_KEY_PATH" root@"$SERVER_IP" "gp wp staging.$LIVE_SITE search-replace 'https://$LIVE_SITE' 'https://staging.$LIVE_SITE' --skip-columns=guid --all-tables --allow-root"
+
+    # Quick sync
+        else 
+        echo ""
+        echo "Exporting wp_posts and wp_postmeta from $LIVE_SITE..."
+        ssh -i "$PRIVATE_KEY_PATH" root@"$SERVER_IP" "gp wp $LIVE_SITE db export /var/www/staging.$LIVE_SITE/htdocs/wp_posts.sql --tables=wp_posts,wp_postmeta --allow-root" && export_success=true
+
+        if [[ $export_success == true ]]; then   
+            echo ""
+            echo "Importing wp_posts and wp_postmeta to $site..."
+            ssh -i "$PRIVATE_KEY_PATH" root@"$SERVER_IP" "gp wp staging.$LIVE_SITE db import /var/www/staging.$LIVE_SITE/htdocs/wp_posts.sql --allow-root"
+
+            # Rewrite URLs in wp_posts and wp_postmeta
+            echo ""
+            echo "Rewriting URLs in wp_posts and wp_postmeta from $LIVE_SITE to staging.$LIVE_SITE..."
+            #ssh -i "$PRIVATE_KEY_PATH" root@"$SERVER_IP" "gp wp staging.$LIVE_SITE search-replace 'https://$LIVE_SITE' 'https://staging.$LIVE_SITE' --skip-columns=guid --tables=wp_posts,wp_postmeta --allow-root"
+            ssh -i "$PRIVATE_KEY_PATH" root@"$SERVER_IP" "gp wp staging.$LIVE_SITE search-replace 'https://$LIVE_SITE' 'https://staging.$LIVE_SITE' wp_post* --skip-columns=guid --allow-root"
+
+        else
+            echo "Export failed. Skipping import."
+        fi
+    fi
+
+    # Common steps for both full process and quick sync
+    
     # Clear the cache for the staging site
     echo "Clearing cache for staging.$LIVE_SITE..."
     ssh -i "$PRIVATE_KEY_PATH" root@"$SERVER_IP" "gp fix cached staging.$LIVE_SITE"
 
-    # Delete the db_stage_sync.sql file
+    # Delete the temporary database export files, if they exist
     echo ""
-    echo "Deleting the temporary database export file..."
-    ssh -i "$PRIVATE_KEY_PATH" root@"$SERVER_IP" "rm /var/www/staging.$LIVE_SITE/htdocs/db_stage_sync.sql"
+    echo "Deleting the temporary database export file, if it exists..."
+    ssh -i "$PRIVATE_KEY_PATH" root@"$SERVER_IP" "[ -f /var/www/staging.$LIVE_SITE/htdocs/wp_posts.sql ] && rm /var/www/staging.$LIVE_SITE/htdocs/wp_posts.sql"
 
 
-    # Ask about syncing themes and plugins
-    echo ""
-    read -p "Do you want to copy themes from $LIVE_SITE? [y/N] " copy_themes
-    if [[ $copy_themes =~ ^[Yy]$ ]]; then
-        ssh -i "$PRIVATE_KEY_PATH" -T "root@$SERVER_IP" "cp -R /root/www/$LIVE_SITE/htdocs/wp-content/themes /root/www/$site/htdocs/wp-content/"
-    fi
+    # Additional steps for full process
+    if [[ $sync_choice == "1" ]]; then
 
-    echo ""
-    read -p "Do you want to copy plugins from $LIVE_SITE? [y/N] " copy_plugins
-    if [[ $copy_plugins =~ ^[Yy]$ ]]; then
-        ssh -i "$PRIVATE_KEY_PATH" -T "root@$SERVER_IP" "cp -R /root/www/$LIVE_SITE/htdocs/wp-content/plugins /root/www/$site/htdocs/wp-content/"
-    fi
-
-    # Ask about copying additional folders from wp-content/uploads
-    echo ""
-    echo "Do you want to copy specific folders from wp-content/uploads? [y/N]"
-    read -p "Your choice: " copy_upload_folders
-    if [[ $copy_upload_folders =~ ^[Yy]$ ]]; then
-    # List non-year directories in wp-content/uploads and store them in an array
-    IFS=$'\n' non_year_dirs=($(ssh -i "$PRIVATE_KEY_PATH" root@"$SERVER_IP" "ls -1 /var/www/$LIVE_SITE/htdocs/wp-content/uploads | grep -vE '^(2003|2004|2005|2006|2007|2008|2009|201[0-9]|20[2-9][0-9])$'"))
-
-    # Ask whether to copy each of these directories
-    for dir in "${non_year_dirs[@]}"; do
+        # Ask about syncing themes and plugins
         echo ""
-        echo "Do you want to copy $dir? [y/N]"
-        read -p "Your choice: " copy_dir
-        if [[ $copy_dir =~ ^[Yy]$ ]]; then
-            echo "Copying $dir..."
-            ssh -i "$PRIVATE_KEY_PATH" root@"$SERVER_IP" "cp -R /var/www/$LIVE_SITE/htdocs/wp-content/uploads/$dir /var/www/staging.$LIVE_SITE/htdocs/wp-content/uploads/"
+        read -p "Do you want to copy themes from $LIVE_SITE? [y/N] " copy_themes
+        if [[ $copy_themes =~ ^[Yy]$ ]]; then
+            ssh -i "$PRIVATE_KEY_PATH" -T "root@$SERVER_IP" "cp -R /root/www/$LIVE_SITE/htdocs/wp-content/themes /root/www/$site/htdocs/wp-content/"
         fi
-    done
-    fi
 
-    # Ask about creating Nginx custom rules for media files
-    echo ""
-    read -p "Do you want to create nginx custom rules for media files? [y/N] " create_nginx_rules
-    if [[ $create_nginx_rules =~ ^[Yy]$ ]]; then
-        NGINX_CONFIG_FILE="/var/www/staging.$LIVE_SITE/nginx/live-media-main-context.conf"
-        LIVE_DOMAIN=${LIVE_SITE/www./}
+        echo ""
+        read -p "Do you want to copy plugins from $LIVE_SITE? [y/N] " copy_plugins
+        if [[ $copy_plugins =~ ^[Yy]$ ]]; then
+            ssh -i "$PRIVATE_KEY_PATH" -T "root@$SERVER_IP" "cp -R /root/www/$LIVE_SITE/htdocs/wp-content/plugins /root/www/$site/htdocs/wp-content/"
+        fi
 
-        # Create Nginx configuration for redirecting media
-        echo "Creating Nginx configuration for media redirects..."
-        ssh -i "$PRIVATE_KEY_PATH" root@"$SERVER_IP" "echo 'location ~* ^/wp-content/uploads/(.*)\$ { rewrite ^/wp-content/uploads/(.*)\$ https://$LIVE_DOMAIN/wp-content/uploads/\$1 redirect; }' > $NGINX_CONFIG_FILE"
+        # Ask about copying additional folders from wp-content/uploads
+        echo ""
+        echo "Do you want to copy specific folders from wp-content/uploads? [y/N]"
+        read -p "Your choice: " copy_upload_folders
+        if [[ $copy_upload_folders =~ ^[Yy]$ ]]; then
+            # List non-year directories in wp-content/uploads and store them in an array
+            IFS=$'\n' non_year_dirs=($(ssh -i "$PRIVATE_KEY_PATH" root@"$SERVER_IP" "ls -1 /var/www/$LIVE_SITE/htdocs/wp-content/uploads | grep -vE '^(2003|2004|2005|2006|2007|2008|2009|201[0-9]|20[2-9][0-9])$'"))
 
-        # Test and reload Nginx
-        echo "Testing and reloading Nginx..."
-        ssh -i "$PRIVATE_KEY_PATH" root@"$SERVER_IP" "nginx -t && gp ngx reload"
+            # Ask whether to copy each of these directories
+            for dir in "${non_year_dirs[@]}"; do
+                echo ""
+                echo "Do you want to copy $dir? [y/N]"
+                read -p "Your choice: " copy_dir
+                if [[ $copy_dir =~ ^[Yy]$ ]]; then
+                    echo "Copying $dir..."
+                    ssh -i "$PRIVATE_KEY_PATH" root@"$SERVER_IP" "cp -R /var/www/$LIVE_SITE/htdocs/wp-content/uploads/$dir /var/www/staging.$LIVE_SITE/htdocs/wp-content/uploads/"
+                fi
+            done
+        fi
+
+        # Ask about creating Nginx custom rules for media files
+        echo ""
+        read -p "Do you want to create nginx custom rules for media files? [y/N] " create_nginx_rules
+        if [[ $create_nginx_rules =~ ^[Yy]$ ]]; then
+            NGINX_CONFIG_FILE="/var/www/staging.$LIVE_SITE/nginx/live-media-main-context.conf"
+            LIVE_DOMAIN=${LIVE_SITE/www./}
+
+            # Create Nginx configuration for redirecting media
+            echo "Creating Nginx configuration for media redirects..."
+            ssh -i "$PRIVATE_KEY_PATH" root@"$SERVER_IP" "echo 'location ~* ^/wp-content/uploads/(.*)\$ { rewrite ^/wp-content/uploads/(.*)\$ https://$LIVE_DOMAIN/wp-content/uploads/\$1 redirect; }' > $NGINX_CONFIG_FILE"
+
+            # Test and reload Nginx
+            echo "Testing and reloading Nginx..."
+            ssh -i "$PRIVATE_KEY_PATH" root@"$SERVER_IP" "nginx -t && gp ngx reload"
+        fi
+        
     fi
 
     # Add more steps as needed
