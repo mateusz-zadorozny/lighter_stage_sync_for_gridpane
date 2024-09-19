@@ -72,60 +72,77 @@ while true; do
     echo "Select sync method:"
     echo "1) Full process (full database and optional: files and nginx rule)"
     echo "2) Just wp_posts & wp_postmeta quick sync"
-    read -p "Your choice [1/2]: " sync_choice
+    echo "3) Full database sync & rewrite"
+    read -p "Your choice [1/2/3]: " sync_choice
 
     if [[ $sync_choice == "1" ]]; then
-            # Full process
-            echo ""
-            echo "Exporting the database from $LIVE_SITE..."
-            ssh -i "$PRIVATE_KEY_PATH" root@"$SERVER_IP" "gp wp $LIVE_SITE db export $STAGING_DB --add-drop-table --allow-root"
+        # Full process
+        echo ""
+        echo "Exporting the database from $LIVE_SITE..."
+        ssh -i "$PRIVATE_KEY_PATH" root@"$SERVER_IP" "gp wp $LIVE_SITE db export $STAGING_DB --add-drop-table --allow-root"
 
-            echo ""
-            echo "Importing database to $site..."
-            ssh -i "$PRIVATE_KEY_PATH" root@"$SERVER_IP" "gp wp staging.$LIVE_SITE db import $STAGING_DB --allow-root"
+        echo ""
+        echo "Importing database to $site..."
+        ssh -i "$PRIVATE_KEY_PATH" root@"$SERVER_IP" "gp wp staging.$LIVE_SITE db import $STAGING_DB --allow-root"
 
-            # Rewrite URLs from live to staging
-            echo ""
-            echo "Rewriting URLs from $LIVE_SITE to staging.$LIVE_SITE..."
-            ssh -i "$PRIVATE_KEY_PATH" root@"$SERVER_IP" "gp wp staging.$LIVE_SITE search-replace 'https://$LIVE_SITE' 'https://staging.$LIVE_SITE' --skip-columns=guid --all-tables --allow-root"
+        # Rewrite URLs from live to staging
+        echo ""
+        echo "Rewriting URLs from $LIVE_SITE to staging.$LIVE_SITE..."
+        ssh -i "$PRIVATE_KEY_PATH" root@"$SERVER_IP" "gp wp staging.$LIVE_SITE search-replace 'https://$LIVE_SITE' 'https://staging.$LIVE_SITE' --skip-columns=guid --all-tables --allow-root"
 
-    # Quick sync
-        else 
+    elif [[ $sync_choice == "2" ]]; then
+        # Quick sync
         echo ""
         echo "Exporting wp_posts and wp_postmeta from $LIVE_SITE..."
-        ssh -i "$PRIVATE_KEY_PATH" root@"$SERVER_IP" "gp wp $LIVE_SITE db export /var/www/staging.$LIVE_SITE/htdocs/wp_posts.sql --tables=wp_posts,wp_postmeta --allow-root" && export_success=true
+        ssh -i "$PRIVATE_KEY_PATH" root@"$SERVER_IP" "gp wp $LIVE_SITE db export $WP_POSTS_DB --tables=wp_posts,wp_postmeta --allow-root" && export_success=true
 
         if [[ $export_success == true ]]; then   
             echo ""
             echo "Importing wp_posts and wp_postmeta to $site..."
-            ssh -i "$PRIVATE_KEY_PATH" root@"$SERVER_IP" "gp wp staging.$LIVE_SITE db import /var/www/staging.$LIVE_SITE/htdocs/wp_posts.sql --allow-root"
+            ssh -i "$PRIVATE_KEY_PATH" root@"$SERVER_IP" "gp wp staging.$LIVE_SITE db import $WP_POSTS_DB --allow-root"
 
             # Rewrite URLs in wp_posts and wp_postmeta
             echo ""
             echo "Rewriting URLs in wp_posts and wp_postmeta from $LIVE_SITE to staging.$LIVE_SITE..."
-            #ssh -i "$PRIVATE_KEY_PATH" root@"$SERVER_IP" "gp wp staging.$LIVE_SITE search-replace 'https://$LIVE_SITE' 'https://staging.$LIVE_SITE' --skip-columns=guid --tables=wp_posts,wp_postmeta --allow-root"
             ssh -i "$PRIVATE_KEY_PATH" root@"$SERVER_IP" "gp wp staging.$LIVE_SITE search-replace 'https://$LIVE_SITE' 'https://staging.$LIVE_SITE' wp_post* --skip-columns=guid --allow-root"
 
         else
             echo "Export failed. Skipping import."
         fi
+
+    elif [[ $sync_choice == "3" ]]; then
+        # Full database sync & rewrite
+        echo ""
+        echo "Exporting the full database from $LIVE_SITE..."
+        ssh -i "$PRIVATE_KEY_PATH" root@"$SERVER_IP" "gp wp $LIVE_SITE db export $STAGING_DB --add-drop-table --allow-root"
+
+        echo ""
+        echo "Importing the full database to $site..."
+        ssh -i "$PRIVATE_KEY_PATH" root@"$SERVER_IP" "gp wp staging.$LIVE_SITE db import $STAGING_DB --allow-root"
+
+        # Rewrite URLs from live to staging
+        echo ""
+        echo "Rewriting URLs from $LIVE_SITE to staging.$LIVE_SITE..."
+        ssh -i "$PRIVATE_KEY_PATH" root@"$SERVER_IP" "gp wp staging.$LIVE_SITE search-replace 'https://$LIVE_SITE' 'https://staging.$LIVE_SITE' --skip-columns=guid --all-tables --allow-root"
+
+    else
+        echo "Invalid selection. Please try again."
+        continue
     fi
 
-    # Common steps for both full process and quick sync
-    
+    # Common steps for all sync methods
     # Clear the cache for the staging site
+    echo ""
     echo "Clearing cache for staging.$LIVE_SITE..."
     ssh -i "$PRIVATE_KEY_PATH" root@"$SERVER_IP" "gp fix cached staging.$LIVE_SITE"
 
     # Delete the temporary database export files, if they exist
     echo ""
-    echo "Deleting the temporary database export file, if it exists..."
-    ssh -i "$PRIVATE_KEY_PATH" root@"$SERVER_IP" "[ -f /var/www/staging.$LIVE_SITE/htdocs/wp_posts.sql ] && rm /var/www/staging.$LIVE_SITE/htdocs/wp_posts.sql"
-
+    echo "Deleting temporary database export files, if they exist..."
+    ssh -i "$PRIVATE_KEY_PATH" root@"$SERVER_IP" "rm -f $STAGING_DB $WP_POSTS_DB"
 
     # Additional steps for full process
     if [[ $sync_choice == "1" ]]; then
-
         # Ask about syncing themes and plugins
         echo ""
         read -p "Do you want to copy themes from $LIVE_SITE? [y/N] " copy_themes
@@ -174,7 +191,6 @@ while true; do
             echo "Testing and reloading Nginx..."
             ssh -i "$PRIVATE_KEY_PATH" root@"$SERVER_IP" "nginx -t && gp ngx reload"
         fi
-        
     fi
 
     # Add more steps as needed
