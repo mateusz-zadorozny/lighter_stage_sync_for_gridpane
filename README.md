@@ -6,15 +6,50 @@ With proper config we sync the staging with our live site, but we use the media 
 
 ## How to use?
 
-1. Create a staging site through the GridPane panel, set SSL (or not) and check if it works
-2. Create backup for your primary site in GridPane panel in case you make an error while editing the bash file
-2. Create a copy of lighter_stage_sync_for_gridpane.sh file and name it sync_light.sh (to be ignored by Git)
-3. Fill in your private key location in sync_light.sh in line 4
-4. Add GridPane servers you want to work with (line 7 for friendly names, line 8 for IPs)
-5. Save the file
-6. In terminal in the folder run following command: bash sync_light.sh
-7. Pick the server and choose the staging site you want to sync
-8. After database sync the script will ask you to sync plugins, theme or folders in in wp-uploads/content (not the media ones)
-9. Finally the script will ask you for nginx rules rewrite to use the live site media instead of ones in staging.yoursite.com/... folders
+### One-time setup
+
+1. Make sure you can reach each server with a plain `ssh <alias>` (e.g. `ssh bo`).
+   This means having a matching `Host` entry in your `~/.ssh/config` that carries
+   the user, hostname and key:
+
+   ```
+   Host bo
+       HostName 231.x.x.x
+       User root
+       IdentityFile ~/.ssh/your_key
+   ```
+
+2. Copy the example config and fill in your own sites:
+
+   ```
+   cp .env.example .env
+   ```
+
+   In `.env`, `SITES` is a newline-separated list of `<ssh_alias>|<live_domain>`
+   entries. Staging is derived automatically as `staging.<live_domain>`:
+
+   ```
+   SITES="
+   bo|example.com
+   bo|shop.example.com
+   ko|another-site.com
+   "
+   ```
+
+   `.env` is git-ignored, so your connection details never get committed.
+
+### Each sync
+
+1. Create a staging site through the GridPane panel, set SSL (or not) and check it works.
+2. Create a backup of your primary site in the GridPane panel, in case of an error.
+3. In a terminal in this folder run: `bash lighter_stage_sync_for_gridpane.sh`
+4. Pick the site you want to sync (the SSH connection is chosen automatically from `.env`).
+5. Choose a sync method:
+   - **1** — full process: full database, then *asks* about copying files and the nginx rule.
+   - **2** — quick sync of `wp_posts` & `wp_postmeta` only (does not trigger neutralization).
+   - **3** — full database sync & rewrite only (no files).
+   - **4** — EVERYTHING, no questions: full database + all files + nginx rule + neutralization.
+6. After the database sync the script will ask you to sync plugins, theme or folders in wp-content/uploads (not the media ones).
+7. Finally the script will ask you for an nginx rule rewrite, to use the live site media instead of ones in `staging.yoursite.com/...` folders.
 
 After initial sync - rewriting nginx is not necessary. The staging site should use the media from the live site.
